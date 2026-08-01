@@ -1,0 +1,2733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>GEOLENS — GPS Camera</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&family=Noto+Sans+Devanagari:wght@500;700&display=swap" rel="stylesheet">
+<style>
+<style>
+/* ============================================================
+   GEOLENS — design tokens
+   Subject grounding: a field surveying / rangefinder instrument.
+   Near-black body, phosphor-green primary signal, amber/red as
+   degraded-signal states — the same vocabulary a real GNSS
+   receiver's status LED uses.
+   ============================================================ */
+:root{
+  --bg:            #0a0d0b;
+  --panel:         rgba(14, 19, 16, 0.72);
+  --panel-solid:   #101512;
+  --hairline:      rgba(231, 243, 236, 0.14);
+  --text:          #e7f3ec;
+  --muted:         #7c8c83;
+
+  --good:          #4cff9e;
+  --warn:          #ffc259;
+  --bad:           #ff5c6c;
+  --idle:          #7c8c83;
+
+  --font-display:  'Oxanium', sans-serif;
+  --font-mono:     'JetBrains Mono', monospace;
+  --font-body:     'Inter', sans-serif;
+  --font-hi:       'Noto Sans Devanagari', sans-serif;
+
+  --radius-sm: 6px;
+  --radius-md: 14px;
+}
+
+*{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body{
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  overscroll-behavior: none;
+}
+
+button{ font-family: inherit; cursor: pointer; }
+select, input[type="range"]{ font-family: inherit; }
+
+.app{
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+#video{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+/* ---- Rule-of-thirds grid overlay ---- */
+.grid-overlay{
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.grid-overlay.active{ opacity: 1; }
+.grid-overlay .line{
+  position: absolute;
+  background: rgba(231,243,236,0.35);
+}
+.grid-overlay .v1{ left: 33.333%; top: 0; bottom: 0; width: 1px; }
+.grid-overlay .v2{ left: 66.666%; top: 0; bottom: 0; width: 1px; }
+.grid-overlay .h1{ top: 33.333%; left: 0; right: 0; height: 1px; }
+.grid-overlay .h2{ top: 66.666%; left: 0; right: 0; height: 1px; }
+
+/* ============================================================
+   HUD
+   ============================================================ */
+.hud{
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+  padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+  font-family: var(--font-display);
+}
+
+.hud-top{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: auto;
+  gap: 8px;
+}
+
+.brand{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  font-size: 15px;
+  color: var(--text);
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  flex-shrink: 0;
+}
+.brand-mark{
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 8px var(--good);
+  flex-shrink: 0;
+}
+
+.hud-top-right{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status{
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  color: var(--idle);
+  white-space: nowrap;
+}
+.status[data-level="good"]{ color: var(--good); border-color: rgba(76,255,158,0.35); }
+.status[data-level="warn"]{ color: var(--warn); border-color: rgba(255,194,89,0.35); }
+.status[data-level="bad"]{  color: var(--bad);  border-color: rgba(255,92,108,0.35); }
+
+.icon-btn{
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.icon-btn svg{ width: 16px; height: 16px; }
+.icon-btn[data-active="true"]{ color: var(--good); border-color: rgba(76,255,158,0.4); }
+
+/* ---- Reticle / accuracy ring (signature element) ---- */
+.reticle-wrap{
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.accuracy-ring{
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 60px; height: 60px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px solid var(--idle);
+  transition: width 0.35s ease, height 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
+}
+.accuracy-ring[data-level="good"]{ border-color: var(--good); box-shadow: 0 0 18px rgba(76,255,158,0.25) inset, 0 0 12px rgba(76,255,158,0.2); animation: pulse-good 2.6s ease-in-out infinite; }
+.accuracy-ring[data-level="warn"]{ border-color: var(--warn); box-shadow: 0 0 18px rgba(255,194,89,0.2) inset; }
+.accuracy-ring[data-level="bad"]{  border-color: var(--bad);  box-shadow: 0 0 18px rgba(255,92,108,0.2) inset; }
+
+@keyframes pulse-good{
+  0%, 100%{ opacity: 1; }
+  50%{ opacity: 0.55; }
+}
+
+.reticle{
+  position: relative;
+  width: 74px;
+  height: 74px;
+}
+.reticle-corner{
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text);
+  opacity: 0.85;
+}
+.reticle-corner.tl{ top: 0; left: 0; border-right: none; border-bottom: none; }
+.reticle-corner.tr{ top: 0; right: 0; border-left: none; border-bottom: none; }
+.reticle-corner.bl{ bottom: 0; left: 0; border-right: none; border-top: none; }
+.reticle-corner.br{ bottom: 0; right: 0; border-left: none; border-top: none; }
+.reticle-dot{
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 4px; height: 4px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--text);
+}
+
+.ring-caption{
+  position: absolute;
+  top: calc(50% + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+.ring-caption span{ color: var(--text); }
+
+/* ---- Recording banner ---- */
+.rec-banner{
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 92, 108, 0.16);
+  border: 1px solid rgba(255, 92, 108, 0.4);
+  color: var(--bad);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-family: var(--font-mono);
+}
+.rec-banner-dot{
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--bad);
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink{ 50%{ opacity: 0.2; } }
+
+/* ---- Lower cluster: data strip + timestamp + controls ---- */
+.lower{
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.data-strip{
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(8px);
+  padding: 10px 12px;
+  position: relative;
+}
+.data-strip:active{ background: rgba(76,255,158,0.06); }
+.data-cell{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.data-cell label{
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.data-cell span{
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.copy-hint{
+  position: absolute;
+  top: 6px; right: 10px;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.timestamp{
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.timestamp #timeStamp{ color: var(--text); }
+
+.controls{
+  display: grid;
+  grid-template-columns: 1fr 1fr auto 1fr 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.ctrl-btn{
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 10px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  backdrop-filter: blur(8px);
+}
+.ctrl-btn:active{ background: rgba(231,243,236,0.12); }
+.ctrl-btn.ghost{ color: var(--muted); }
+.ctrl-btn:disabled{ opacity: 0.4; }
+
+.shutter{
+  justify-self: center;
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 3px solid rgba(231,243,236,0.35);
+  position: relative;
+}
+.shutter span{
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+}
+.shutter:active{ transform: scale(0.94); }
+.shutter:disabled{ opacity: 0.4; }
+
+button.record{
+  width: 46px; height: 46px;
+  border-radius: 50%;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rec-dot{
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--bad);
+  transition: border-radius 0.2s ease, transform 0.2s ease;
+}
+button.record[data-recording="true"] .rec-dot{
+  border-radius: 4px;
+  transform: scale(0.85);
+}
+
+#fileCount{ color: var(--good); }
+
+/* ============================================================
+   Permission gate
+   ============================================================ */
+.permission-gate{
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(76,255,158,0.06), transparent 60%),
+    var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+.gate-card{
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+}
+.gate-card h1{
+  font-family: var(--font-display);
+  font-size: 30px;
+  letter-spacing: 0.16em;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+.tagline{
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.5;
+  margin: 0 0 20px;
+}
+.gate-list{
+  list-style: none;
+  padding: 0;
+  margin: 0 0 26px;
+  text-align: left;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.gate-list li{
+  padding: 12px 16px;
+  font-size: 13.5px;
+  color: var(--text);
+  border-bottom: 1px solid var(--hairline);
+  position: relative;
+  padding-left: 30px;
+}
+.gate-list li:last-child{ border-bottom: none; }
+.gate-list li::before{
+  content: '';
+  position: absolute;
+  left: 14px; top: 16px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--good);
+}
+#startBtn{
+  width: 100%;
+  padding: 15px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--good);
+  color: #06140d;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  font-size: 14px;
+}
+#startBtn:active{ opacity: 0.85; }
+#startBtn:disabled{ opacity: 0.5; }
+.gate-note{
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--bad);
+  font-family: var(--font-mono);
+  min-height: 14px;
+}
+.gate-credit{
+  margin-top: 28px;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.gate-credit .hi{ font-family: var(--font-hi); color: var(--text); font-size: 12.5px; }
+
+/* ============================================================
+   Toast
+   ============================================================ */
+.toast{
+  position: absolute;
+  bottom: max(210px, 24vh);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(14, 20, 17, 0.94);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  max-width: 86%;
+  text-align: center;
+  z-index: 40;
+}
+.toast[data-tone="error"]{ border-color: rgba(255,92,108,0.4); }
+.toast[data-tone="success"]{ border-color: rgba(76,255,158,0.4); }
+
+/* ============================================================
+   Slide-up panels (Gallery / Settings) — shared shell
+   ============================================================ */
+.panel{
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  background: rgba(6, 9, 7, 0.97);
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+}
+.panel-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+.panel-header h2{
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  margin: 0;
+  color: var(--text);
+}
+.panel-body{
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Gallery */
+.gallery-grid{
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  align-content: start;
+}
+.gallery-empty{
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  margin-top: 40px;
+}
+.gallery-item{
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--panel-solid);
+  display: flex;
+  flex-direction: column;
+}
+.gallery-item img, .gallery-item video{
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+.gallery-item-meta{
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gallery-item-meta span{
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.gallery-item-actions{
+  display: flex;
+  gap: 6px;
+}
+.gallery-item-actions a, .gallery-item-actions button{
+  flex: 1;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--good);
+  text-decoration: none;
+  background: none;
+  border: 1px solid rgba(76,255,158,0.35);
+  border-radius: var(--radius-sm);
+  padding: 6px 4px;
+  text-align: center;
+}
+.gallery-item-actions .danger{ color: var(--bad); border-color: rgba(255,92,108,0.35); }
+.gallery-clear{
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px;
+  background: none;
+  border: 1px solid rgba(255,92,108,0.3);
+  color: var(--bad);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+/* Settings / About tabs */
+.tabs{
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+.tab-btn{
+  flex: 1;
+  background: var(--panel-solid);
+  border: 1px solid var(--hairline);
+  color: var(--muted);
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.tab-btn[data-active="true"]{ color: var(--good); border-color: rgba(76,255,158,0.4); background: rgba(76,255,158,0.06); }
+
+.tab-panel{ display: none; }
+.tab-panel[data-active="true"]{ display: block; }
+
+.settings-group{ margin-bottom: 22px; }
+.settings-group-title{
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.settings-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.settings-row:last-child{ border-bottom: none; }
+.settings-row-text{ min-width: 0; }
+.settings-label{ font-size: 13.5px; color: var(--text); }
+.settings-sub{ font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.segmented{
+  display: flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.segmented button{
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 7px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.segmented button[data-active="true"]{ background: var(--good); color: #06140d; }
+
+.toggle{ position: relative; width: 44px; height: 25px; flex-shrink: 0; }
+.toggle input{ opacity: 0; width: 0; height: 0; }
+.toggle .slider{
+  position: absolute; inset: 0;
+  background: rgba(231,243,236,0.15);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+  cursor: pointer;
+}
+.toggle .slider::before{
+  content: '';
+  position: absolute;
+  width: 19px; height: 19px;
+  left: 3px; top: 3px;
+  background: #dfe9e3;
+  border-radius: 50%;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.toggle input:checked + .slider{ background: var(--good); }
+.toggle input:checked + .slider::before{ transform: translateX(19px); background: #06140d; }
+.toggle input:disabled + .slider{ opacity: 0.35; }
+
+input[type="range"]{
+  width: 120px;
+  accent-color: var(--good);
+}
+
+select.select-input{
+  background: var(--panel-solid);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+.reset-btn{
+  width: 100%;
+  padding: 12px;
+  background: none;
+  border: 1px dashed var(--hairline);
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+/* About tab */
+.about-block{ margin-bottom: 18px; }
+.about-title{
+  font-family: var(--font-display);
+  letter-spacing: 0.1em;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.about-text{ font-size: 13px; line-height: 1.6; color: var(--text); margin: 0; }
+.about-features{ list-style: none; padding: 0; margin: 0; }
+.about-features li{
+  font-size: 13px;
+  color: var(--text);
+  padding: 8px 0 8px 18px;
+  border-bottom: 1px solid var(--hairline);
+  position: relative;
+}
+.about-features li::before{
+  content: '';
+  position: absolute;
+  left: 0; top: 15px;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--good);
+}
+.about-features li:last-child{ border-bottom: none; }
+
+.credit-block{
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
+  text-align: center;
+}
+.credit-block p{
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin: 0;
+}
+.credit-block .hi{
+  display: block;
+  font-family: var(--font-hi);
+  font-size: 16px;
+  color: var(--good);
+  margin-top: 6px;
+}
+.version-tag{
+  display: inline-block;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+/* ============================================================
+   Small screens / reduced motion
+   ============================================================ */
+@media (max-width: 340px){
+  .data-strip{ grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .accuracy-ring[data-level="good"]{ animation: none; }
+  .rec-banner-dot{ animation: none; }
+}
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible{
+  outline: 2px solid var(--good);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   In-app browser / WebView warning banner
+   ============================================================ */
+.webview-banner{
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 50;
+  background: rgba(255, 194, 89, 0.16);
+  border-bottom: 1px solid rgba(255, 194, 89, 0.45);
+  color: var(--warn);
+  padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  backdrop-filter: blur(8px);
+}
+.webview-banner strong{ color: var(--text); }
+.webview-banner .wv-text{ flex: 1; min-width: 0; }
+.webview-banner .wv-close{
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid rgba(255,194,89,0.4);
+  color: var(--warn);
+  border-radius: var(--radius-sm);
+  width: 26px; height: 26px;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.webview-banner .wv-copy{
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #06140d;
+  background: var(--warn);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+}
+
+/* ============================================================
+   Diagnostic overlay (on-device debug console — no devtools needed)
+   ============================================================ */
+.diag-overlay{
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  background: rgba(4, 6, 5, 0.96);
+  color: #b9f6d3;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+}
+.diag-overlay .diag-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.diag-overlay .diag-header h2{
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--good);
+  margin: 0;
+}
+.diag-overlay .diag-actions{ display: flex; gap: 8px; }
+.diag-overlay .diag-actions button{
+  background: var(--panel-solid);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+.diag-log{
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: rgba(0,0,0,0.35);
+}
+.diag-log .diag-line{ padding: 2px 0; border-bottom: 1px dotted rgba(231,243,236,0.08); }
+.diag-log .diag-line[data-level="error"]{ color: var(--bad); }
+.diag-log .diag-line[data-level="warn"]{ color: var(--warn); }
+.diag-log .diag-empty{ color: var(--muted); }
+.diag-toggle-btn[data-active="true"]{ color: var(--warn); border-color: rgba(255,194,89,0.4); }
+
+/* ---- Tap-to-resume video gesture gate ---- */
+.resume-gate{
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  background: rgba(6, 9, 7, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+  padding: 24px;
+}
+.resume-gate p{
+  color: var(--text);
+  font-size: 13.5px;
+  max-width: 280px;
+  margin: 0;
+}
+.resume-gate button{
+  padding: 12px 22px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--good);
+  color: #06140d;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  font-size: 13px;
+}
+
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- Live camera feed -->
+  <video id="video" autoplay playsinline muted></video>
+
+  <div class="grid-overlay" id="gridOverlay">
+    <span class="line v1"></span><span class="line v2"></span>
+    <span class="line h1"></span><span class="line h2"></span>
+  </div>
+
+  <!-- Offscreen canvases used for compositing (never shown directly) -->
+  <canvas id="photoCanvas" hidden></canvas>
+  <canvas id="recordCanvas" hidden></canvas>
+
+  <!-- HUD overlay -->
+  <div class="hud">
+
+    <div class="hud-top">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        GEOLENS
+      </div>
+      <div class="hud-top-right">
+        <div class="status" id="gpsStatus" data-level="none">ACQUIRING SIGNAL</div>
+        <button class="icon-btn diag-toggle-btn" id="diagToggleBtn" title="Diagnostics" aria-label="Toggle on-device diagnostics">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="13" rx="2"/><path d="M9 3.5 11 7M15 3.5 13 7M4 13h16M9 17h.01M15 17h.01"/></svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Open settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.04 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04Z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="reticle-wrap">
+      <div class="accuracy-ring" id="accuracyRing"></div>
+      <div class="reticle">
+        <span class="reticle-corner tl"></span>
+        <span class="reticle-corner tr"></span>
+        <span class="reticle-corner bl"></span>
+        <span class="reticle-corner br"></span>
+        <span class="reticle-dot"></span>
+      </div>
+      <div class="ring-caption">± <span id="accRadius">--</span> <span id="accUnit">m</span> indicative radius</div>
+    </div>
+
+    <div class="rec-banner" id="recBanner" hidden>
+      <span class="rec-banner-dot"></span> REC <span id="recTimer">00:00</span>
+    </div>
+
+    <div class="lower">
+      <div class="data-strip" id="dataStrip" title="Tap to copy coordinates">
+        <span class="copy-hint">TAP TO COPY</span>
+        <div class="data-cell"><label>LAT</label><span id="lat">--</span></div>
+        <div class="data-cell"><label>LON</label><span id="lon">--</span></div>
+        <div class="data-cell"><label>ALT</label><span id="alt">--</span></div>
+        <div class="data-cell"><label>ACC</label><span id="acc">--</span></div>
+        <div class="data-cell"><label>SPD</label><span id="spd">--</span></div>
+        <div class="data-cell"><label>HDG</label><span id="hdg">--°</span></div>
+      </div>
+      <div class="timestamp"><span id="dateStamp">----.--.--</span> <span id="timeStamp">--:--:--</span></div>
+
+      <div class="controls">
+        <button id="mapBtn" class="ctrl-btn ghost" title="Open location in maps">MAP</button>
+        <button id="switchBtn" class="ctrl-btn ghost" title="Switch camera">FLIP</button>
+        <button id="shutterBtn" class="shutter" aria-label="Capture photo"><span></span></button>
+        <button id="recordBtn" class="ctrl-btn record" aria-label="Record video"><span class="rec-dot"></span></button>
+        <button id="galleryBtn" class="ctrl-btn ghost" title="View captured files">FILES <span id="fileCount">0</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Permission / start gate -->
+  <div class="permission-gate" id="permissionGate">
+    <div class="gate-card">
+      <h1>GEOLENS</h1>
+      <p class="tagline">Live-location camera. Every frame stamped with your exact position.</p>
+      <ul class="gate-list">
+        <li>Camera access — for photo &amp; video capture</li>
+        <li>Precise location access — for continuous GPS lock</li>
+      </ul>
+      <button id="startBtn">ENABLE &amp; START</button>
+      <p class="gate-note" id="gateNote"></p>
+      <p class="gate-credit">This site is created by Keshav Kumar<br><span class="hi">यह साइट केशव कुमार द्वारा बनाई गई है</span></p>
+    </div>
+  </div>
+
+  <!-- Shown only if getUserMedia succeeded but video.play() lost user
+       activation (see camera.js BUG FIX #4) — one tap supplies a fresh
+       gesture so the preview can start. -->
+  <div class="resume-gate" id="resumeGate" hidden>
+    <p>Camera is ready, but your browser needs one more tap to start the preview.</p>
+    <button id="resumeGateBtn">TAP TO START PREVIEW</button>
+  </div>
+
+  <!-- Error / status toast -->
+  <div class="toast" id="toast" hidden></div>
+
+  <!-- Gallery panel -->
+  <div class="panel" id="galleryPanel" hidden>
+    <div class="panel-header">
+      <h2>CAPTURED FILES</h2>
+      <button id="closeGallery" class="ctrl-btn ghost">CLOSE</button>
+    </div>
+    <div class="panel-body">
+      <div class="gallery-grid" id="galleryGrid">
+        <p class="gallery-empty" id="galleryEmpty">Nothing captured yet. Files stay in this session only — download or share anything you want to keep.</p>
+      </div>
+      <button class="gallery-clear" id="clearGallery" hidden>CLEAR ALL FILES</button>
+    </div>
+  </div>
+
+  <!-- Settings / About panel -->
+  <div class="panel" id="settingsPanel" hidden>
+    <div class="panel-header">
+      <h2>SETTINGS</h2>
+      <button id="closeSettings" class="ctrl-btn ghost">CLOSE</button>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn" data-tab="settings" data-active="true">SETTINGS</button>
+      <button class="tab-btn" data-tab="about">ABOUT</button>
+    </div>
+    <div class="panel-body">
+
+      <div class="tab-panel" data-tab="settings" data-active="true">
+
+        <div class="settings-group">
+          <p class="settings-group-title">DISPLAY UNITS</p>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Measurement units</div>
+              <div class="settings-sub">Applies to altitude, speed &amp; accuracy</div>
+            </div>
+            <div class="segmented" id="unitsSegment">
+              <button data-value="metric" data-active="true">METRIC</button>
+              <button data-value="imperial">IMPERIAL</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <p class="settings-group-title">CAPTURE</p>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Burn geotag into files</div>
+              <div class="settings-sub">Stamps coordinates onto saved photos &amp; videos</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="overlayBurnToggle" checked><span class="slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Overlay style</div>
+              <div class="settings-sub">Background behind the burned-in text</div>
+            </div>
+            <div class="segmented" id="overlayStyleSegment">
+              <button data-value="solid" data-active="true">SOLID</button>
+              <button data-value="transparent">SUBTLE</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Photo quality</div>
+              <div class="settings-sub"><span id="qualityValue">92</span>% JPEG quality</div>
+            </div>
+            <input type="range" id="qualitySlider" min="60" max="100" step="1" value="92">
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Auto-open gallery</div>
+              <div class="settings-sub">Show captured file right after shooting</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="autoOpenToggle"><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <p class="settings-group-title">VIEWFINDER</p>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Rule-of-thirds grid</div>
+              <div class="settings-sub">Composition guide lines on the viewfinder</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="gridToggle"><span class="slider"></span></label>
+          </div>
+          <div class="settings-row" id="torchRow" hidden>
+            <div class="settings-row-text">
+              <div class="settings-label">Flashlight / torch</div>
+              <div class="settings-sub">Only available on supporting rear cameras</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="torchToggle"><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <p class="settings-group-title">SOUND</p>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-label">Shutter &amp; record sounds</div>
+              <div class="settings-sub">Short confirmation tones, generated on-device</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="soundToggle" checked><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <button class="reset-btn" id="resetSettingsBtn">RESET TO DEFAULTS</button>
+      </div>
+
+      <div class="tab-panel" data-tab="about">
+        <div class="about-block">
+          <p class="about-title">WHAT THIS IS</p>
+          <p class="about-text">GEOLENS is a browser-based GPS camera. It reads your device's most accurate available location continuously and stamps it — live — onto photos and video, with no app install and no backend server; everything runs and stays in this browser tab.</p>
+        </div>
+        <div class="about-block">
+          <p class="about-title">FEATURES</p>
+          <ul class="about-features">
+            <li>Continuous high-accuracy GPS lock with a live accuracy-radius indicator</li>
+            <li>Photo capture with a burned-in geotag (coordinates, altitude, accuracy, time)</li>
+            <li>Video recording with a continuously live-updating geotag overlay</li>
+            <li>Front/back camera switching and optional torch control</li>
+            <li>Metric/imperial units, adjustable photo quality, rule-of-thirds grid</li>
+            <li>One-tap coordinate copy and direct hand-off to Google Maps</li>
+            <li>Share or download captured files — nothing is uploaded anywhere</li>
+            <li>On-device diagnostics overlay for troubleshooting camera/GPS issues without devtools</li>
+          </ul>
+        </div>
+        <div class="about-block">
+          <p class="about-title">ACCURACY NOTE</p>
+          <p class="about-text">Location comes from your device's own GNSS/Wi-Fi/cell fusion via the browser's Geolocation API. Reported accuracy typically ranges from a few metres in open sky to tens of metres indoors or near tall buildings — this app displays that real, reported figure rather than a fixed guess.</p>
+        </div>
+        <div class="about-block">
+          <p class="about-title">TROUBLESHOOTING</p>
+          <p class="about-text">If the camera won't open on Android even after allowing it for this site, check Settings → Apps → your browser → Permissions → Camera — Android requires that permission separately from the in-page prompt. Tap the diagnostics icon (top right) to see the exact error being reported.</p>
+        </div>
+        <div class="credit-block">
+          <p>This site is created by Keshav Kumar<span class="hi">यह साइट केशव कुमार द्वारा बनाई गई है</span></p>
+          <span class="version-tag">GEOLENS v3.0</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  'use strict';
+  // ============================================================
+  // Module: diagnostics.js
+  // ============================================================
+  const { diag, initDiagnostics } = (function() {
+    /* ============================================================
+       diagnostics.js
+       On-device diagnostic log. Every module calls diag.log/warn/error
+       instead of (or in addition to) console.*, so a user who hits a
+       silent failure on their phone — with no way to plug in devtools —
+       can open this overlay and see exactly what happened: raw error
+       .name / .message from getUserMedia, geolocation, panel-manager
+       triggers, video play() sequencing, etc.
+       ============================================================ */
+
+    const MAX_LINES = 300;
+    const entries = []; // { ts, level, msg }
+    let logEl = null;
+    let overlayEl = null;
+    let toggleBtn = null;
+
+    function nowLabel() {
+      const d = new Date();
+      return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+
+    function push(level, msg) {
+      const line = { ts: nowLabel(), level, msg: String(msg) };
+      entries.push(line);
+      if (entries.length > MAX_LINES) entries.shift();
+      // Mirror to the real console too, for anyone who *can* attach devtools.
+      const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+      fn('[GEOLENS]', line.msg);
+      render();
+    }
+
+    function render() {
+      if (!logEl) return;
+      if (entries.length === 0) {
+        logEl.innerHTML = '<span class="diag-empty">No diagnostic events yet.</span>';
+        return;
+      }
+      logEl.innerHTML = entries
+        .map(e => `<div class="diag-line" data-level="${e.level}">[${e.ts}] ${escapeHtml(e.msg)}</div>`)
+        .join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    const diag = {
+      log(msg) { push('info', msg); },
+      warn(msg) { push('warn', msg); },
+      error(msg) { push('error', msg); },
+      /** Formats a DOMException/Error into a short "Name: message" diagnostic string. */
+      describeErr(err) {
+        if (!err) return 'unknown error (no error object)';
+        const name = err.name || 'Error';
+        const message = err.message || String(err);
+        return `${name}: ${message}`;
+      }
+    };
+
+    /**
+     * Builds the diagnostic overlay DOM (hidden by default) and wires the
+     * given toggle button to show/hide it. Call once at boot.
+     */
+    function initDiagnostics({ toggleButton, container }) {
+      toggleBtn = toggleButton;
+
+      overlayEl = document.createElement('div');
+      overlayEl.className = 'diag-overlay';
+      overlayEl.hidden = true;
+      overlayEl.innerHTML = `
+        <div class="diag-header">
+          <h2>DIAGNOSTICS</h2>
+          <div class="diag-actions">
+            <button type="button" id="diagCopyBtn">COPY</button>
+            <button type="button" id="diagClearBtn">CLEAR</button>
+            <button type="button" id="diagCloseBtn">CLOSE</button>
+          </div>
+        </div>
+        <div class="diag-log" id="diagLogBody"></div>
+      `;
+      container.appendChild(overlayEl);
+      logEl = overlayEl.querySelector('#diagLogBody');
+
+      overlayEl.querySelector('#diagCloseBtn').addEventListener('click', () => setOpen(false));
+      overlayEl.querySelector('#diagClearBtn').addEventListener('click', () => {
+        entries.length = 0;
+        render();
+      });
+      overlayEl.querySelector('#diagCopyBtn').addEventListener('click', async () => {
+        const text = entries.map(e => `[${e.ts}] ${e.level.toUpperCase()} ${e.msg}`).join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          diag.log('Diagnostic log copied to clipboard.');
+        } catch (e) {
+          diag.warn('Clipboard copy failed: ' + diag.describeErr(e));
+        }
+      });
+
+      toggleBtn.addEventListener('click', () => setOpen(overlayEl.hidden));
+
+      render();
+      diag.log('Diagnostics ready. This overlay shows raw camera/GPS errors on-device.');
+    }
+
+    function setOpen(open) {
+      overlayEl.hidden = !open;
+      if (toggleBtn) toggleBtn.dataset.active = String(open);
+      render();
+    }
+
+    // Global safety net: also capture otherwise-unhandled errors so a crash
+    // deep in a slow Android WebView still leaves a trace in the overlay.
+    window.addEventListener('error', (e) => {
+      diag.error(`Unhandled error: ${e.message} (${e.filename}:${e.lineno})`);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      diag.error('Unhandled promise rejection: ' + diag.describeErr(e.reason));
+    });
+
+    return { diag, initDiagnostics };
+  })();
+
+  // ============================================================
+  // Module: webviewDetect.js
+  // ============================================================
+  const { detectWebView, initWebViewWarning } = (function() {
+    /* ============================================================
+       webviewDetect.js
+       BUG FIX (#2 in the hardening brief): getUserMedia is unreliable
+       or outright blocked inside many Android in-app browsers /
+       WebViews (WhatsApp, Instagram, Facebook, generic embedded
+       WebView shells). There is no single reliable API to detect this
+       — no capability check tells you "you're inside a WebView" — so
+       this is necessarily a best-effort User-Agent heuristic. We warn
+       rather than block, because false positives are possible; the
+       Diagnostics overlay logs the exact UA string and which pattern
+       matched, so it can be tuned without guesswork.
+       ============================================================ */
+
+    // Known in-app browser signatures. Order doesn't matter; first match wins
+    // for the purposes of the label shown to the user.
+    const SIGNATURES = [
+      { id: 'WhatsApp', re: /\bWhatsApp\b/i },
+      { id: 'Instagram', re: /\bInstagram\b/i },
+      { id: 'Facebook / Messenger', re: /\bFB(?:AN|AV|SV|_IAB)\b|\bFacebook\b|\bMessenger\b/i },
+      { id: 'TikTok', re: /\bBytedance|\bTikTok\b|musical_ly/i },
+      { id: 'Snapchat', re: /\bSnapchat\b/i },
+      { id: 'LINE', re: /\bLine\//i },
+      { id: 'Twitter/X', re: /\bTwitter\b/i },
+      { id: 'Generic Android WebView', re: /\bwv\b/i }, // Chrome UA token for "WebView" builds
+    ];
+
+    /**
+     * Returns { isWebView, label, reason } based on UA heuristics.
+     * `reason` records exactly what was matched, for the diagnostic log.
+     */
+    function detectWebView() {
+      const ua = navigator.userAgent || '';
+
+      // A generic Android Chrome WebView UA looks like normal Chrome but
+      // includes a "; wv" token right after the Android build info, e.g.
+      // "Mozilla/5.0 (Linux; Android 13; ...) AppleWebKit/537.36 (KHTML, like Gecko)
+      //  Version/4.0 Chrome/119.0.0.0 Mobile Safari/537.36" <- note NO "wv" here
+      // vs an embedded WebView which inserts "; wv)" or a "Version/x.x" token
+      // Chrome's real mobile browser omits. We check known app signatures
+      // first since those are unambiguous, then fall back to the wv token.
+      for (const sig of SIGNATURES) {
+        if (sig.id === 'Generic Android WebView') continue; // checked last, it's the weakest signal
+        if (sig.re.test(ua)) {
+          diag.log(`WebView heuristic: matched "${sig.id}" in UA.`);
+          return { isWebView: true, label: sig.id, reason: `UA matched /${sig.re.source}/` };
+        }
+      }
+
+      const wvMatch = /; ?wv\)/i.test(ua) || /\bwv\b/i.test(ua);
+      if (wvMatch) {
+        diag.log('WebView heuristic: matched generic Android WebView "wv" token in UA.');
+        return { isWebView: true, label: 'an in-app / embedded browser', reason: 'UA contained the Android WebView "wv" token' };
+      }
+
+      diag.log('WebView heuristic: no in-app-browser signature matched UA — assuming a full browser.');
+      return { isWebView: false, label: null, reason: null };
+    }
+
+    /**
+     * Renders the warning banner into `container` if the heuristic fires.
+     * Dismissible; dismissal is remembered only for this tab (sessionStorage)
+     * so it doesn't nag on every reload within the same in-app browsing session
+     * but does reappear in a genuinely new one.
+     */
+    function initWebViewWarning(container) {
+      const result = detectWebView();
+      if (!result.isWebView) return result;
+
+      const DISMISS_KEY = 'geolens_webview_banner_dismissed';
+      try {
+        if (sessionStorage.getItem(DISMISS_KEY) === '1') {
+          diag.log('WebView banner suppressed: already dismissed this session.');
+          return result;
+        }
+      } catch (e) { /* sessionStorage unavailable — just show the banner every time */ }
+
+      const banner = document.createElement('div');
+      banner.className = 'webview-banner';
+      banner.innerHTML = `
+        <div class="wv-text">
+          <strong>You're inside ${escapeHtml(result.label)}'s in-app browser.</strong>
+          Camera access is often blocked or unreliable here.
+          Open this link in Chrome or Firefox directly for camera access.
+          <br><button type="button" class="wv-copy" id="wvCopyLinkBtn">COPY LINK</button>
+        </div>
+        <button type="button" class="wv-close" id="wvCloseBtn" aria-label="Dismiss">×</button>
+      `;
+      container.prepend(banner);
+
+      banner.querySelector('#wvCloseBtn').addEventListener('click', () => {
+        banner.remove();
+        try { sessionStorage.setItem(DISMISS_KEY, '1'); } catch (e) { /* ignore */ }
+      });
+
+      banner.querySelector('#wvCopyLinkBtn').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(window.location.href);
+          diag.log('Page link copied for pasting into an external browser.');
+        } catch (e) {
+          diag.warn('Could not copy link: ' + diag.describeErr(e));
+        }
+      });
+
+      diag.warn(`Showing in-app-browser warning banner (${result.reason}).`);
+      return result;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    return { detectWebView, initWebViewWarning };
+  })();
+
+  // ============================================================
+  // Module: settings.js
+  // ============================================================
+  const { settings, saveSettings, resetSettings, initSettingsUI } = (function() {
+    /* ============================================================
+       settings.js
+       Loads/saves user settings to localStorage and wires the
+       Settings panel's controls. Nothing here talks to the camera or
+       GPS directly — other modules read `settings` (a live, mutated-
+       in-place object) and re-render when they need to.
+       ============================================================ */
+
+    const SETTINGS_KEY = 'geolens_settings_v3'; // bumped from v2: file layout changed, not the schema
+    const DEFAULT_SETTINGS = {
+      units: 'metric',
+      overlayBurn: true,
+      overlayStyle: 'solid',
+      quality: 92,
+      autoOpenGallery: false,
+      grid: false,
+      sound: true
+    };
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return { ...DEFAULT_SETTINGS };
+        return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      } catch (e) {
+        diag.warn('Could not read saved settings, using defaults: ' + diag.describeErr(e));
+        return { ...DEFAULT_SETTINGS };
+      }
+    }
+
+    const settings = loadSettings();
+
+    function saveSettings() {
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      } catch (e) {
+        diag.warn('Could not persist settings (localStorage unavailable): ' + diag.describeErr(e));
+      }
+    }
+
+    function resetSettings() {
+      Object.assign(settings, DEFAULT_SETTINGS);
+      saveSettings();
+    }
+
+    function setSegmentedActive(container, value) {
+      container.querySelectorAll('button').forEach(btn => {
+        btn.dataset.active = String(btn.dataset.value === value);
+      });
+    }
+
+    /**
+     * Wires all settings-panel controls to the shared `settings` object.
+     * `onUnitsChanged` / `onGridChanged` let other modules (HUD, viewfinder)
+     * react without this module needing to import them directly.
+     */
+    function initSettingsUI(dom, { onUnitsChanged, onGridChanged, onSoundChanged } = {}) {
+      function applySettingsToUI() {
+        setSegmentedActive(dom.unitsSegment, settings.units);
+        setSegmentedActive(dom.overlayStyleSegment, settings.overlayStyle);
+        dom.overlayBurnToggle.checked = settings.overlayBurn;
+        dom.qualitySlider.value = settings.quality;
+        dom.qualityValueEl.textContent = settings.quality;
+        dom.autoOpenToggle.checked = settings.autoOpenGallery;
+        dom.gridToggle.checked = settings.grid;
+        dom.soundToggle.checked = settings.sound;
+        dom.accUnitEl.textContent = settings.units === 'metric' ? 'm' : 'ft';
+      }
+
+      dom.unitsSegment.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        settings.units = btn.dataset.value;
+        applySettingsToUI();
+        saveSettings();
+        onUnitsChanged && onUnitsChanged();
+      });
+
+      dom.overlayStyleSegment.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        settings.overlayStyle = btn.dataset.value;
+        applySettingsToUI();
+        saveSettings();
+      });
+
+      dom.overlayBurnToggle.addEventListener('change', () => {
+        settings.overlayBurn = dom.overlayBurnToggle.checked;
+        saveSettings();
+      });
+
+      dom.qualitySlider.addEventListener('input', () => {
+        settings.quality = Number(dom.qualitySlider.value);
+        dom.qualityValueEl.textContent = settings.quality;
+        saveSettings();
+      });
+
+      dom.autoOpenToggle.addEventListener('change', () => {
+        settings.autoOpenGallery = dom.autoOpenToggle.checked;
+        saveSettings();
+      });
+
+      dom.gridToggle.addEventListener('change', () => {
+        settings.grid = dom.gridToggle.checked;
+        saveSettings();
+        onGridChanged && onGridChanged(settings.grid);
+      });
+
+      dom.soundToggle.addEventListener('change', () => {
+        settings.sound = dom.soundToggle.checked;
+        saveSettings();
+        onSoundChanged && onSoundChanged(settings.sound);
+      });
+
+      dom.resetSettingsBtn.addEventListener('click', () => {
+        resetSettings();
+        applySettingsToUI();
+        onUnitsChanged && onUnitsChanged();
+        onGridChanged && onGridChanged(settings.grid);
+        dom.onReset && dom.onReset();
+      });
+
+      applySettingsToUI();
+      return { applySettingsToUI };
+    }
+
+    return { settings, saveSettings, resetSettings, initSettingsUI };
+  })();
+
+  // ============================================================
+  // Module: panelManager.js
+  // ============================================================
+  const { registerPanel, openPanel, closePanel, closeAllPanels, getOpenPanel } = (function() {
+    /* ============================================================
+       panelManager.js
+       BUG FIX (#3 in the hardening brief): panels were previously
+       opened by scattered `somePanel.hidden = false` assignments
+       throughout the codebase, making it hard to audit *why* a panel
+       ever appears. This module is the ONLY code path allowed to
+       change panel visibility. Every open/close call must name the
+       panel and the concrete user interaction that triggered it; that
+       trigger string is written to the diagnostic log, so if a panel
+       ever appears unexpectedly you can open Diagnostics and see
+       exactly which call opened it (or confirm nothing did, which
+       points at a CSS/layout bug instead of a JS one).
+       ============================================================ */
+
+    const panels = new Map(); // name -> HTMLElement
+    let currentlyOpen = null;
+
+    function registerPanel(name, el) {
+      if (!el) {
+        diag.warn(`registerPanel("${name}") called with a missing element.`);
+        return;
+      }
+      panels.set(name, el);
+    }
+
+    /**
+     * Opens exactly one named panel and hides all others managed by this
+     * module. `trigger` must describe the concrete user action (e.g.
+     * "click:settingsBtn") — never call this from a timer, a data
+     * callback, or app-init code.
+     */
+    function openPanel(name, trigger) {
+      const el = panels.get(name);
+      if (!el) {
+        diag.error(`openPanel("${name}") — no panel registered with that name.`);
+        return;
+      }
+      if (!trigger) {
+        diag.warn(`openPanel("${name}") called without a trigger label — this should always be a named user interaction.`);
+      }
+      panels.forEach((panelEl, panelName) => {
+        panelEl.hidden = panelName !== name;
+      });
+      currentlyOpen = name;
+      diag.log(`panel OPEN "${name}" ← trigger: ${trigger || 'unknown'}`);
+    }
+
+    function closePanel(name, trigger) {
+      const el = panels.get(name);
+      if (!el) return;
+      el.hidden = true;
+      if (currentlyOpen === name) currentlyOpen = null;
+      diag.log(`panel CLOSE "${name}" ← trigger: ${trigger || 'unknown'}`);
+    }
+
+    function closeAllPanels(trigger) {
+      panels.forEach((panelEl, name) => {
+        if (!panelEl.hidden) diag.log(`panel CLOSE "${name}" ← trigger: ${trigger || 'unknown'} (closeAll)`);
+        panelEl.hidden = true;
+      });
+      currentlyOpen = null;
+    }
+
+    function getOpenPanel() {
+      return currentlyOpen;
+    }
+
+    return { registerPanel, openPanel, closePanel, closeAllPanels, getOpenPanel };
+  })();
+
+  // ============================================================
+  // Module: ui.js
+  // ============================================================
+  const { initToast, showToast, beep, initPanels, openGalleryFromCapture } = (function() {
+    /* ============================================================
+       ui.js
+       Small shared UI utilities: toasts, on-device beep feedback, tab
+       switching inside the Settings panel, and the buttons that open/
+       close panels — every open/close call is routed through
+       panelManager so panel visibility always has a logged, named
+       trigger (see panelManager.js for why).
+       ============================================================ */
+
+    let toastEl = null;
+    let toastTimer = null;
+
+    function initToast(el) {
+      toastEl = el;
+    }
+
+    function showToast(message, tone) {
+      if (!toastEl) return;
+      toastEl.textContent = message;
+      toastEl.dataset.tone = tone || 'default';
+      toastEl.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3200);
+    }
+
+    // ---------------------------------------------------------------
+    // Synthesized sound feedback — no audio files needed
+    // ---------------------------------------------------------------
+    let audioCtx = null;
+    function beep(freq, durationMs, type) {
+      if (!settings.sound) return;
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type || 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.18, audioCtx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + durationMs / 1000);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durationMs / 1000 + 0.02);
+      } catch (e) {
+        diag.warn('WebAudio beep failed (non-fatal): ' + diag.describeErr(e));
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Panels — registration + button wiring, all via panelManager
+    // ---------------------------------------------------------------
+    function initPanels(dom) {
+      registerPanel('gallery', dom.galleryPanel);
+      registerPanel('settings', dom.settingsPanel);
+
+      dom.settingsBtn.addEventListener('click', () => openPanel('settings', 'click:settingsBtn'));
+      dom.closeSettings.addEventListener('click', () => closePanel('settings', 'click:closeSettings'));
+
+      dom.galleryBtn.addEventListener('click', () => openPanel('gallery', 'click:galleryBtn'));
+      dom.closeGallery.addEventListener('click', () => closePanel('gallery', 'click:closeGallery'));
+
+      dom.tabButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          dom.tabButtons.forEach(b => b.dataset.active = String(b === btn));
+          const target = btn.dataset.tab;
+          dom.tabPanels.forEach(p => p.dataset.active = String(p.dataset.tab === target));
+          diag.log(`settings tab switched to "${target}" ← trigger: click:tab-${target}`);
+        });
+      });
+    }
+
+    /** Used by gallery.js: opens the gallery panel after a capture, but ONLY
+     *  when the user has explicitly enabled "auto-open gallery" — so this is
+     *  still a traceable, opt-in trigger rather than an unconditional side effect. */
+    function openGalleryFromCapture() {
+      if (settings.autoOpenGallery) {
+        openPanel('gallery', 'auto-open-gallery-setting:capture-complete');
+      }
+    }
+
+    return { initToast, showToast, beep, initPanels, openGalleryFromCapture };
+  })();
+
+  // ============================================================
+  // Module: camera.js
+  // ============================================================
+  const { createCameraController } = (function() {
+    /* ============================================================
+       camera.js
+       BUG FIX #1 — "camera fails to open even after the site-level
+       prompt is accepted":
+         On Android, a site can be granted camera permission in the
+         browser's own per-site dialog and STILL be blocked, because
+         the browser app itself (Chrome, Samsung Internet, Firefox...)
+         needs OS-level permission too (Settings > Apps > <browser> >
+         Permissions > Camera). getUserMedia() reports both failure
+         modes as the same NotAllowedError — there is no separate error
+         name for "OS blocked the browser app". We narrow this down by:
+           1. Querying the Permissions API (navigator.permissions.query)
+              for 'camera' BEFORE calling getUserMedia, when available.
+           2. Remembering (sessionStorage) whether getUserMedia has
+              already succeeded once in this tab.
+         If either signal says the SITE-level permission was already
+         granted, and getUserMedia() still throws NotAllowedError, we
+         show OS-level instructions instead of the generic
+         "permission denied" message, since a genuine site-level
+         re-prompt is not possible in that state.
+
+       BUG FIX #4 — losing "user activation" (transient activation)
+       across a slow Android permission prompt:
+         Autoplay of <video> without user activation can be blocked.
+         getUserMedia's own permission prompt can consume enough time
+         (or, on some Android WebViews, enough of a "gesture" budget)
+         that by the time we call video.play(), the browser no longer
+         considers this part of the original tap. We:
+           1. Keep the awaited chain from click → getUserMedia → play()
+              as short as possible (no unrelated awaits in between).
+           2. Explicitly catch video.play() rejection. If it fails with
+              NotAllowedError (activation lost) we do NOT treat that as
+              a camera failure — the stream is live, only autoplay was
+              blocked — and instead show a one-tap "resume gate" so the
+              user's next tap supplies fresh activation.
+       ============================================================ */
+
+    const CAMERA_GRANTED_KEY = 'geolens_camera_granted_this_session';
+
+    function createCameraController({ video, torchRow, torchToggle, showToast }) {
+      let mediaStream = null;
+      let hasAudio = false;
+      let facingMode = 'environment'; // back camera by default
+      let torchTrack = null;
+      let isRecordingCheck = () => false; // set via setRecordingCheck
+
+      function setRecordingCheck(fn) { isRecordingCheck = fn; }
+
+      function wasSiteLevelPreviouslyGranted() {
+        try {
+          return sessionStorage.getItem(CAMERA_GRANTED_KEY) === '1';
+        } catch (e) { return false; }
+      }
+
+      function markSiteLevelGranted() {
+        try { sessionStorage.setItem(CAMERA_GRANTED_KEY, '1'); } catch (e) { /* ignore */ }
+      }
+
+      async function queryCameraPermissionState() {
+        if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
+        try {
+          const status = await navigator.permissions.query({ name: 'camera' });
+          diag.log(`Permissions API reports camera = "${status.state}" before getUserMedia call.`);
+          return status.state; // 'granted' | 'denied' | 'prompt'
+        } catch (e) {
+          diag.log('Permissions API camera query unsupported/failed: ' + diag.describeErr(e));
+          return 'unknown';
+        }
+      }
+
+      /**
+       * Builds a user-facing error message, distinguishing OS-level
+       * app-permission blocks from ordinary site-level denial per BUG FIX #1.
+       */
+      function describeError(err, sitePermissionState) {
+        if (err && err.name === 'NotAllowedError') {
+          const siteAlreadyGranted = sitePermissionState === 'granted' || wasSiteLevelPreviouslyGranted();
+          if (siteAlreadyGranted) {
+            diag.error('NotAllowedError after a prior site-level grant — likely an OS-level app permission block.');
+            return 'Camera access was blocked even though this site was already allowed. On Android this usually means the browser app itself needs the OS-level permission: open Settings → Apps → (your browser, e.g. Chrome/Firefox/Samsung Internet) → Permissions → Camera, and make sure it is allowed there, then reload this page.';
+          }
+          diag.error('NotAllowedError with no prior site-level grant — treating as a normal permission denial.');
+          return 'Camera permission was denied. Allow camera access when your browser prompts you, or re-enable it via the site settings (tap the lock/info icon in the address bar), then retry.';
+        }
+        if (err && err.name === 'NotFoundError') {
+          return 'No camera was found on this device.';
+        }
+        if (err && err.name === 'NotReadableError') {
+          return 'The camera is already in use by another app. Close other camera apps and retry.';
+        }
+        if (err && err.name === 'OverconstrainedError') {
+          return 'This device could not satisfy the requested camera settings.';
+        }
+        return 'Could not start the camera: ' + diag.describeErr(err);
+      }
+
+      async function startCamera(mode) {
+        if (isRecordingCheck()) {
+          showToast('Stop recording before switching camera.', 'error');
+          diag.warn('startCamera() aborted: a recording is in progress.');
+          return;
+        }
+        stopTracks(mediaStream);
+
+        const sitePermissionState = await queryCameraPermissionState();
+
+        const videoConstraints = {
+          facingMode: { ideal: mode },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        };
+
+        diag.log(`Requesting getUserMedia (audio+video, facingMode=${mode})…`);
+        try {
+          // Try with audio first (needed for video sound); if the mic is
+          // blocked or unavailable, fall back to video-only so the camera
+          // still works instead of failing outright.
+          try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: videoConstraints });
+            hasAudio = mediaStream.getAudioTracks().length > 0;
+          } catch (audioErr) {
+            diag.log('audio+video getUserMedia failed, retrying video-only: ' + diag.describeErr(audioErr));
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints });
+            hasAudio = false;
+          }
+        } catch (err) {
+          diag.error('getUserMedia failed: ' + diag.describeErr(err));
+          const message = describeError(err, sitePermissionState);
+          const wrapped = new Error(message);
+          wrapped.name = err && err.name || 'CameraError';
+          wrapped.original = err;
+          throw wrapped;
+        }
+
+        diag.log('getUserMedia succeeded — camera stream acquired.');
+        markSiteLevelGranted();
+
+        // ---- BUG FIX #4: keep this chain short so we don't lose the
+        // transient activation from the user's tap on slower devices ----
+        video.srcObject = mediaStream;
+        const playOutcome = await attemptPlay(video);
+        if (playOutcome === 'blocked-needs-gesture') {
+          // Stream is live; only autoplay was blocked. Surface a one-tap
+          // resume affordance rather than reporting this as a camera failure.
+          return { needsResumeGesture: true };
+        }
+
+        await waitForVideoReady(video);
+        setupTorchAvailability();
+        return { needsResumeGesture: false };
+      }
+
+      async function attemptPlay(videoEl) {
+        try {
+          await videoEl.play();
+          diag.log('video.play() resolved normally.');
+          return 'ok';
+        } catch (err) {
+          diag.warn('video.play() was rejected: ' + diag.describeErr(err) + ' — likely lost user activation, not a camera failure.');
+          return 'blocked-needs-gesture';
+        }
+      }
+
+      /** Called from the resume-gate's own click handler, which supplies a
+       *  fresh, guaranteed-current user gesture. */
+      async function resumePlaybackFromGesture() {
+        try {
+          await video.play();
+          diag.log('video.play() resolved after explicit resume-gate tap.');
+          await waitForVideoReady(video);
+          setupTorchAvailability();
+          return true;
+        } catch (err) {
+          diag.error('video.play() still failed after an explicit user tap: ' + diag.describeErr(err));
+          return false;
+        }
+      }
+
+      function stopTracks(stream) {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+      }
+
+      function waitForVideoReady(videoEl) {
+        if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) return Promise.resolve();
+        return new Promise((resolve) => {
+          const onReady = () => { videoEl.removeEventListener('loadedmetadata', onReady); resolve(); };
+          videoEl.addEventListener('loadedmetadata', onReady);
+          setTimeout(resolve, 1500); // safety timeout — never hang forever
+        });
+      }
+
+      function setupTorchAvailability() {
+        torchTrack = null;
+        torchRow.hidden = true;
+        torchToggle.checked = false;
+        const track = mediaStream && mediaStream.getVideoTracks()[0];
+        if (!track || typeof track.getCapabilities !== 'function') return;
+        try {
+          const caps = track.getCapabilities();
+          if (caps && caps.torch) {
+            torchTrack = track;
+            torchRow.hidden = false;
+            diag.log('Torch/flashlight capability detected on active camera track.');
+          }
+        } catch (e) {
+          diag.log('getCapabilities() unsupported — torch control stays hidden: ' + diag.describeErr(e));
+        }
+      }
+
+      async function setTorch(on) {
+        if (!torchTrack) return false;
+        try {
+          await torchTrack.applyConstraints({ advanced: [{ torch: on }] });
+          return true;
+        } catch (err) {
+          diag.warn('Torch toggle failed: ' + diag.describeErr(err));
+          return false;
+        }
+      }
+
+      async function switchCamera() {
+        if (isRecordingCheck()) {
+          showToast('Stop recording before switching camera.', 'error');
+          return;
+        }
+        const previousMode = facingMode;
+        facingMode = facingMode === 'environment' ? 'user' : 'environment';
+        try {
+          const result = await startCamera(facingMode);
+          return result;
+        } catch (err) {
+          facingMode = previousMode; // revert on failure
+          throw err;
+        }
+      }
+
+      return {
+        startCamera,
+        switchCamera,
+        setTorch,
+        resumePlaybackFromGesture,
+        describeError,
+        setRecordingCheck,
+        get facingMode() { return facingMode; },
+        get mediaStream() { return mediaStream; },
+        get hasAudio() { return hasAudio; },
+        stopAll() { stopTracks(mediaStream); }
+      };
+    }
+
+    return { createCameraController };
+  })();
+
+  // ============================================================
+  // Module: geolocation.js
+  // ============================================================
+  const { createGeolocationController } = (function() {
+    /* ============================================================
+       geolocation.js
+       Continuous, high-accuracy geolocation.watchPosition() and the
+       HUD field formatting derived from each fix. Kept UI-adjacent
+       (touches DOM directly) since the HUD is a tight 1:1 mirror of
+       position data — splitting formatting into a separate "pure"
+       module would add indirection without real benefit here.
+       ============================================================ */
+
+    // Accuracy ring sizing (stylized, not to geographic scale — a
+    // realistic 3-60m accuracy range is mapped to a readable 40-150px
+    // ring so the eye can register "tightening lock" as it happens).
+    const RING_MIN_PX = 40;
+    const RING_MAX_PX = 150;
+    const RING_MIN_M = 3;
+    const RING_MAX_M = 60;
+
+    function createGeolocationController(dom) {
+      let watchId = null;
+      let lastPosition = null;
+
+      function start() {
+        if (!('geolocation' in navigator)) {
+          dom.gpsStatus.textContent = 'GEOLOCATION UNSUPPORTED';
+          diag.error('navigator.geolocation is unavailable in this browser/context.');
+          return;
+        }
+        diag.log('Starting geolocation.watchPosition (enableHighAccuracy=true).');
+        watchId = navigator.geolocation.watchPosition(
+          onPosition,
+          onPositionError,
+          {
+            enableHighAccuracy: true, // request the GNSS-fused fix, not the coarse Wi-Fi/IP one
+            maximumAge: 0,            // never reuse a cached fix — always the freshest available
+            timeout: 15000
+          }
+        );
+      }
+
+      function stop() {
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+          diag.log('Stopped geolocation.watchPosition.');
+          watchId = null;
+        }
+      }
+
+      function onPositionError(err) {
+        let msg = 'LOCATION ERROR';
+        if (err.code === err.PERMISSION_DENIED) msg = 'LOCATION PERMISSION DENIED';
+        else if (err.code === err.POSITION_UNAVAILABLE) msg = 'POSITION UNAVAILABLE';
+        else if (err.code === err.TIMEOUT) msg = 'SIGNAL TIMEOUT — RETRYING';
+        diag.warn(`Geolocation error (code ${err.code}): ${msg} — ${err.message || ''}`);
+        dom.gpsStatus.textContent = msg;
+        dom.gpsStatus.dataset.level = 'bad';
+        dom.accuracyRing.dataset.level = 'bad';
+      }
+
+      function onPosition(position) {
+        lastPosition = position;
+        updateHUD(position);
+      }
+
+      function accuracyLevel(accuracyMeters) {
+        if (accuracyMeters <= 10) return 'good';
+        if (accuracyMeters <= 30) return 'warn';
+        return 'bad';
+      }
+
+      function metersToFeet(m) { return m * 3.28084; }
+      function mpsToKmh(mps) { return mps * 3.6; }
+      function mpsToMph(mps) { return mps * 2.23694; }
+
+      function formatDistance(meters) {
+        if (meters === null || meters === undefined || isNaN(meters)) return '—';
+        if (settings.units === 'imperial') return Math.round(metersToFeet(meters)) + ' ft';
+        return Math.round(meters) + ' m';
+      }
+
+      function formatSpeed(mps) {
+        if (mps === null || mps === undefined || isNaN(mps)) return '—';
+        if (settings.units === 'imperial') return Math.round(mpsToMph(mps)) + ' mph';
+        return Math.round(mpsToKmh(mps)) + ' km/h';
+      }
+
+      function updateHUD(position) {
+        const c = position.coords;
+        const level = accuracyLevel(c.accuracy);
+
+        dom.latEl.textContent = c.latitude.toFixed(6);
+        dom.lonEl.textContent = c.longitude.toFixed(6);
+        dom.altEl.textContent = formatDistance(c.altitude);
+        dom.accEl.textContent = formatDistance(c.accuracy);
+        dom.spdEl.textContent = formatSpeed(c.speed);
+        dom.hdgEl.textContent = (c.heading === null || c.heading === undefined || isNaN(c.heading))
+          ? '—' : Math.round(c.heading) + '°';
+
+        const d = new Date(position.timestamp);
+        dom.dateStampEl.textContent = d.toISOString().slice(0, 10);
+        dom.timeStampEl.textContent = d.toLocaleTimeString([], { hour12: false });
+
+        dom.gpsStatus.dataset.level = level;
+        dom.gpsStatus.textContent =
+          level === 'good' ? 'HIGH ACCURACY LOCK' :
+          level === 'warn' ? 'MODERATE ACCURACY' :
+                              'LOW ACCURACY';
+
+        // Signature element: accuracy ring scales with the real accuracy radius
+        const clamped = Math.max(RING_MIN_M, Math.min(RING_MAX_M, c.accuracy));
+        const t = (clamped - RING_MIN_M) / (RING_MAX_M - RING_MIN_M);
+        const px = Math.round(RING_MIN_PX + t * (RING_MAX_PX - RING_MIN_PX));
+        dom.accuracyRing.style.width = px + 'px';
+        dom.accuracyRing.style.height = px + 'px';
+        dom.accuracyRing.dataset.level = level;
+        dom.accRadiusEl.textContent = settings.units === 'imperial' ? Math.round(metersToFeet(c.accuracy)) : Math.round(c.accuracy);
+        dom.accUnitEl.textContent = settings.units === 'imperial' ? 'ft' : 'm';
+      }
+
+      return {
+        start,
+        stop,
+        formatDistance,
+        formatSpeed,
+        get lastPosition() { return lastPosition; },
+        refreshHUD() { if (lastPosition) updateHUD(lastPosition); }
+      };
+    }
+
+    return { createGeolocationController };
+  })();
+
+  // ============================================================
+  // Module: overlay.js
+  // ============================================================
+  const { overlayLines, drawOverlay } = (function() {
+    /* ============================================================
+       overlay.js
+       Single source of truth for the geotag text burned into BOTH
+       photos and video frames, so they always match. Pure canvas
+       drawing — no DOM elements, no listeners.
+       ============================================================ */
+
+    function overlayLines(lastPosition, formatDistance) {
+      if (!lastPosition) return ['NO GPS FIX'];
+      const c = lastPosition.coords;
+      const d = new Date(lastPosition.timestamp);
+      return [
+        `${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}`,
+        `ALT ${formatDistance(c.altitude)}   ACC ±${formatDistance(c.accuracy)}`,
+        `${d.toISOString().slice(0, 10)}  ${d.toLocaleTimeString([], { hour12: false })}`
+      ];
+    }
+
+    function drawOverlay(ctx, w, h, lastPosition, formatDistance) {
+      if (!settings.overlayBurn) return;
+      const lines = overlayLines(lastPosition, formatDistance);
+      const pad = Math.round(w * 0.02);
+      const fontSize = Math.max(14, Math.round(w * 0.018));
+      const lineHeight = fontSize * 1.35;
+      const boxHeight = pad * 2 + lines.length * lineHeight;
+
+      ctx.fillStyle = settings.overlayStyle === 'solid'
+        ? 'rgba(6, 10, 8, 0.6)'
+        : 'rgba(6, 10, 8, 0.28)';
+      ctx.fillRect(0, h - boxHeight, w, boxHeight);
+
+      ctx.fillStyle = '#eafff2';
+      ctx.font = `600 ${fontSize}px 'JetBrains Mono', monospace`;
+      ctx.textBaseline = 'top';
+      lines.forEach((line, i) => {
+        ctx.fillText(line, pad, h - boxHeight + pad + i * lineHeight);
+      });
+
+      ctx.font = `700 ${Math.max(12, Math.round(w * 0.014))}px 'Oxanium', sans-serif`;
+      ctx.fillStyle = 'rgba(234,255,242,0.85)';
+      ctx.fillText('GEOLENS', pad, pad);
+    }
+
+    return { overlayLines, drawOverlay };
+  })();
+
+  // ============================================================
+  // Module: capture.js
+  // ============================================================
+  const { createCaptureController } = (function() {
+    /* ============================================================
+       capture.js
+       Still-photo capture: draws the current video frame + geotag
+       overlay onto an offscreen canvas and encodes it to JPEG.
+       ============================================================ */
+
+    function createCaptureController({ video, photoCanvas, getLastPosition, formatDistance, showToast, beep, addFile, fileTimestamp }) {
+      function capturePhoto() {
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!w || !h) {
+          showToast('Camera not ready yet.', 'error');
+          diag.warn('Shutter pressed before video had dimensions (videoWidth/Height = 0).');
+          return;
+        }
+
+        photoCanvas.width = w;
+        photoCanvas.height = h;
+        const ctx = photoCanvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+        drawOverlay(ctx, w, h, getLastPosition(), formatDistance);
+
+        photoCanvas.toBlob((blob) => {
+          if (!blob) {
+            showToast('Could not create photo.', 'error');
+            diag.error('photoCanvas.toBlob() returned null.');
+            return;
+          }
+          const url = URL.createObjectURL(blob);
+          addFile({
+            type: 'photo',
+            url,
+            blob,
+            name: `geolens_${fileTimestamp()}.jpg`,
+            ts: new Date()
+          });
+          beep(880, 90, 'square');
+          diag.log('Photo captured and added to gallery.');
+        }, 'image/jpeg', settings.quality / 100);
+      }
+
+      return { capturePhoto };
+    }
+
+    return { createCaptureController };
+  })();
+
+  // ============================================================
+  // Module: recorder.js
+  // ============================================================
+  const { createRecorderController } = (function() {
+    /* ============================================================
+       recorder.js
+       Video recording: redraws the live frame + fresh geotag overlay
+       onto a canvas every animation frame, and records that canvas's
+       captureStream() via MediaRecorder — this is what makes the
+       geotag "live" in the output file rather than a single stamp
+       applied once.
+       ============================================================ */
+
+    function createRecorderController({ video, recordCanvas, getLastPosition, formatDistance, getMediaStream, hasAudio, showToast, beep, addFile, fileTimestamp, dom }) {
+      let compositeLoopId = null;
+      let mediaRecorder = null;
+      let recordedChunks = [];
+      let recordStartTime = null;
+      let recTimerInterval = null;
+      let isRecording = false;
+
+      function pickMimeType() {
+        const candidates = [
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm'
+        ];
+        return candidates.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+      }
+
+      function toggleRecording() {
+        if (isRecording) stopRecording(); else startRecording();
+      }
+
+      function startRecording() {
+        const mediaStream = getMediaStream();
+        if (!mediaStream) {
+          diag.warn('startRecording() called with no active media stream.');
+          return;
+        }
+        if (!window.MediaRecorder) {
+          showToast('Video recording is not supported in this browser.', 'error');
+          diag.error('window.MediaRecorder is unavailable.');
+          return;
+        }
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!w || !h) {
+          showToast('Camera not ready yet.', 'error');
+          diag.warn('Record pressed before video had dimensions.');
+          return;
+        }
+
+        recordCanvas.width = w;
+        recordCanvas.height = h;
+        const ctx = recordCanvas.getContext('2d');
+
+        function drawLoop() {
+          ctx.drawImage(video, 0, 0, w, h);
+          drawOverlay(ctx, w, h, getLastPosition(), formatDistance);
+          compositeLoopId = requestAnimationFrame(drawLoop);
+        }
+        drawLoop();
+
+        let canvasStream;
+        try {
+          canvasStream = recordCanvas.captureStream(30);
+        } catch (err) {
+          cancelAnimationFrame(compositeLoopId);
+          showToast('This browser does not support recording canvas video.', 'error');
+          diag.error('canvas.captureStream() failed: ' + diag.describeErr(err));
+          return;
+        }
+
+        if (hasAudio()) {
+          mediaStream.getAudioTracks().forEach(track => canvasStream.addTrack(track));
+        }
+
+        const mimeType = pickMimeType();
+        recordedChunks = [];
+        try {
+          mediaRecorder = new MediaRecorder(canvasStream, mimeType ? { mimeType } : undefined);
+        } catch (err) {
+          cancelAnimationFrame(compositeLoopId);
+          showToast('Video recording is not supported in this browser.', 'error');
+          diag.error('MediaRecorder construction failed: ' + diag.describeErr(err));
+          return;
+        }
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+        };
+        mediaRecorder.onstop = onRecordingStop;
+        mediaRecorder.onerror = (e) => {
+          diag.error('MediaRecorder error: ' + diag.describeErr(e.error));
+          showToast('Recording stopped due to an unexpected error.', 'error');
+          stopRecording();
+        };
+        mediaRecorder.start(1000); // gather data every second so nothing is lost on a crash
+
+        isRecording = true;
+        recordStartTime = Date.now();
+        dom.recBanner.hidden = false;
+        dom.recordBtn.dataset.recording = 'true';
+        dom.switchBtn.disabled = true;
+        recTimerInterval = setInterval(updateRecTimer, 250);
+        beep(520, 120, 'sine');
+        diag.log(`Recording started (mimeType="${mimeType || 'default'}", audio=${hasAudio()}).`);
+      }
+
+      function updateRecTimer() {
+        const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+        const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const ss = String(elapsed % 60).padStart(2, '0');
+        dom.recTimerEl.textContent = `${mm}:${ss}`;
+      }
+
+      function stopRecording() {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
+        if (compositeLoopId) cancelAnimationFrame(compositeLoopId);
+        clearInterval(recTimerInterval);
+        dom.recBanner.hidden = true;
+        dom.recordBtn.dataset.recording = 'false';
+        dom.switchBtn.disabled = false;
+        isRecording = false;
+        beep(320, 140, 'sine');
+        diag.log('Recording stopped.');
+      }
+
+      function onRecordingStop() {
+        if (recordedChunks.length === 0) {
+          diag.warn('Recording produced no data chunks — skipping file creation.');
+          return;
+        }
+        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        addFile({
+          type: 'video',
+          url,
+          blob,
+          name: `geolens_${fileTimestamp()}.webm`,
+          ts: new Date()
+        });
+        diag.log(`Video file created (${(blob.size / 1024).toFixed(0)} KB) and added to gallery.`);
+      }
+
+      return {
+        toggleRecording,
+        stopRecording,
+        get isRecording() { return isRecording; }
+      };
+    }
+
+    return { createRecorderController };
+  })();
+
+  // ============================================================
+  // Module: gallery.js
+  // ============================================================
+  const { createGalleryController } = (function() {
+    /* ============================================================
+       gallery.js
+       In-memory-only file management (no backend, ever). Renders the
+       captured photo/video list and wires save/share/delete actions.
+       ============================================================ */
+
+    function createGalleryController(dom, { onFileAdded, showToast }) {
+      let files = []; // { type, url, blob, name, ts }
+
+      function fileTimestamp() {
+        return new Date().toISOString().replace(/[:.]/g, '-');
+      }
+
+      function addFile(file) {
+        files.unshift(file);
+        dom.fileCountEl.textContent = String(files.length);
+        renderGallery();
+        onFileAdded && onFileAdded(file);
+      }
+
+      function canShareFiles(file) {
+        if (!navigator.canShare) return false;
+        try {
+          const testFile = new File([file.blob], file.name, { type: file.blob.type });
+          return navigator.canShare({ files: [testFile] });
+        } catch (e) { return false; }
+      }
+
+      async function shareFile(file) {
+        try {
+          const shareFile = new File([file.blob], file.name, { type: file.blob.type });
+          await navigator.share({ files: [shareFile], title: file.name });
+          diag.log(`Shared "${file.name}" via navigator.share.`);
+        } catch (err) {
+          if (err && err.name !== 'AbortError') {
+            showToast('Sharing failed on this device.', 'error');
+            diag.warn('navigator.share failed: ' + diag.describeErr(err));
+          }
+        }
+      }
+
+      function renderGallery() {
+        dom.galleryGrid.querySelectorAll('.gallery-item').forEach(n => n.remove());
+        dom.galleryEmpty.hidden = files.length > 0;
+        dom.clearGalleryBtn.hidden = files.length === 0;
+
+        files.forEach((f) => {
+          const item = document.createElement('div');
+          item.className = 'gallery-item';
+
+          const media = document.createElement(f.type === 'photo' ? 'img' : 'video');
+          media.src = f.url;
+          if (f.type === 'video') { media.controls = true; }
+          item.appendChild(media);
+
+          const meta = document.createElement('div');
+          meta.className = 'gallery-item-meta';
+
+          const label = document.createElement('span');
+          label.textContent = `${f.type.toUpperCase()} · ${f.ts.toLocaleTimeString([], { hour12: false })}`;
+          meta.appendChild(label);
+
+          const actions = document.createElement('div');
+          actions.className = 'gallery-item-actions';
+
+          const link = document.createElement('a');
+          link.href = f.url;
+          link.download = f.name;
+          link.textContent = 'SAVE';
+          actions.appendChild(link);
+
+          if (canShareFiles(f)) {
+            const shareBtn = document.createElement('button');
+            shareBtn.textContent = 'SHARE';
+            shareBtn.addEventListener('click', () => shareFile(f));
+            actions.appendChild(shareBtn);
+          }
+
+          const delBtn = document.createElement('button');
+          delBtn.textContent = 'DELETE';
+          delBtn.className = 'danger';
+          delBtn.addEventListener('click', () => removeFile(f));
+          actions.appendChild(delBtn);
+
+          meta.appendChild(actions);
+          item.appendChild(meta);
+          dom.galleryGrid.appendChild(item);
+        });
+      }
+
+      function removeFile(file) {
+        files = files.filter(f => f !== file);
+        URL.revokeObjectURL(file.url);
+        dom.fileCountEl.textContent = String(files.length);
+        renderGallery();
+      }
+
+      dom.clearGalleryBtn.addEventListener('click', () => {
+        files.forEach(f => URL.revokeObjectURL(f.url));
+        files = [];
+        dom.fileCountEl.textContent = '0';
+        renderGallery();
+        showToast('All captured files cleared.', 'success');
+        diag.log('Gallery cleared by user.');
+      });
+
+      function revokeAll() {
+        files.forEach(f => URL.revokeObjectURL(f.url));
+      }
+
+      return { addFile, fileTimestamp, revokeAll };
+    }
+
+    return { createGalleryController };
+  })();
+
+  // ============================================================
+  // Module: main.js (boot sequence)
+  // ============================================================
+  /* ============================================================
+     main.js
+     Boot sequence only. Every real feature lives in its own module;
+     this file wires DOM references to those modules and starts the
+     app. Architecture, in one paragraph:
+       1. getUserMedia() gives the live camera feed, shown directly
+          in <video> — never touched per-frame (camera.js).
+       2. geolocation.watchPosition() runs continuously in the
+          background with enableHighAccuracy:true (geolocation.js).
+       3. On "capture", the current video frame + current position
+          are drawn together onto an offscreen canvas (capture.js).
+       4. On "record", the same drawing runs every animation frame
+          into a second canvas, whose captureStream() MediaRecorder
+          actually records (recorder.js).
+     No backend anywhere: everything lives in this tab's memory (or
+     localStorage, for settings only) until you tap download/share.
+     ============================================================ */
+
+  const $ = (id) => document.getElementById(id);
+
+  const dom = {
+    app: $('app'),
+    video: $('video'),
+    gridOverlay: $('gridOverlay'),
+    photoCanvas: $('photoCanvas'),
+    recordCanvas: $('recordCanvas'),
+
+    permissionGate: $('permissionGate'),
+    startBtn: $('startBtn'),
+    gateNote: $('gateNote'),
+    toast: $('toast'),
+
+    gpsStatus: $('gpsStatus'),
+    accuracyRing: $('accuracyRing'),
+    accRadiusEl: $('accRadius'),
+    accUnitEl: $('accUnit'),
+
+    latEl: $('lat'), lonEl: $('lon'), altEl: $('alt'), accEl: $('acc'), spdEl: $('spd'), hdgEl: $('hdg'),
+    dateStampEl: $('dateStamp'), timeStampEl: $('timeStamp'), dataStrip: $('dataStrip'),
+
+    mapBtn: $('mapBtn'), switchBtn: $('switchBtn'), shutterBtn: $('shutterBtn'),
+    recordBtn: $('recordBtn'), galleryBtn: $('galleryBtn'), fileCountEl: $('fileCount'),
+
+    recBanner: $('recBanner'), recTimerEl: $('recTimer'),
+
+    galleryPanel: $('galleryPanel'), galleryGrid: $('galleryGrid'), galleryEmpty: $('galleryEmpty'),
+    closeGallery: $('closeGallery'), clearGalleryBtn: $('clearGallery'),
+
+    settingsBtn: $('settingsBtn'), settingsPanel: $('settingsPanel'), closeSettings: $('closeSettings'),
+    tabButtons: document.querySelectorAll('.tab-btn'), tabPanels: document.querySelectorAll('.tab-panel'),
+
+    unitsSegment: $('unitsSegment'), overlayStyleSegment: $('overlayStyleSegment'),
+    overlayBurnToggle: $('overlayBurnToggle'), qualitySlider: $('qualitySlider'), qualityValueEl: $('qualityValue'),
+    autoOpenToggle: $('autoOpenToggle'), gridToggle: $('gridToggle'),
+    torchRow: $('torchRow'), torchToggle: $('torchToggle'), soundToggle: $('soundToggle'),
+    resetSettingsBtn: $('resetSettingsBtn'),
+
+    diagToggleBtn: $('diagToggleBtn'),
+    resumeGate: $('resumeGate'), resumeGateBtn: $('resumeGateBtn')
+  };
+
+  // ---------------------------------------------------------------
+  // Boot: diagnostics + in-app-browser warning first, so they're
+  // available no matter what else fails below.
+  // ---------------------------------------------------------------
+  initDiagnostics({ toggleButton: dom.diagToggleBtn, container: dom.app });
+  initWebViewWarning(dom.app);
+  initToast(dom.toast);
+
+  // ---------------------------------------------------------------
+  // Settings + panels
+  // ---------------------------------------------------------------
+  const geo = createGeolocationController(dom);
+
+  initSettingsUI({ ...dom, onReset: () => {} }, {
+    onUnitsChanged: () => geo.refreshHUD(),
+    onGridChanged: (on) => dom.gridOverlay.classList.toggle('active', on),
+    onSoundChanged: () => {}
+  });
+  dom.gridOverlay.classList.toggle('active', settings.grid);
+  dom.accUnitEl.textContent = settings.units === 'metric' ? 'm' : 'ft';
+
+  initPanels(dom);
+
+  // ---------------------------------------------------------------
+  // Camera + gallery + capture + recorder
+  // ---------------------------------------------------------------
+  const camera = createCameraController({
+    video: dom.video,
+    torchRow: dom.torchRow,
+    torchToggle: dom.torchToggle,
+    showToast
+  });
+
+  const gallery = createGalleryController(dom, {
+    showToast,
+    onFileAdded: () => {
+      // Only opens if the user has explicitly enabled auto-open —
+      // still a traceable, opt-in trigger via panelManager.
+      if (settings.autoOpenGallery) openPanel('gallery', 'setting:autoOpenGallery');
+    }
+  });
+
+  const capture = createCaptureController({
+    video: dom.video,
+    photoCanvas: dom.photoCanvas,
+    getLastPosition: () => geo.lastPosition,
+    formatDistance: geo.formatDistance,
+    showToast,
+    beep,
+    addFile: gallery.addFile,
+    fileTimestamp: gallery.fileTimestamp
+  });
+
+  const recorder = createRecorderController({
+    video: dom.video,
+    recordCanvas: dom.recordCanvas,
+    getLastPosition: () => geo.lastPosition,
+    formatDistance: geo.formatDistance,
+    getMediaStream: () => camera.mediaStream,
+    hasAudio: () => camera.hasAudio,
+    showToast,
+    beep,
+    addFile: gallery.addFile,
+    fileTimestamp: gallery.fileTimestamp,
+    dom
+  });
+
+  camera.setRecordingCheck(() => recorder.isRecording);
+
+  // ---------------------------------------------------------------
+  // Boot gate — camera + geolocation only start on an explicit tap
+  // ---------------------------------------------------------------
+  function isSecureContextOk() {
+    return window.isSecureContext; // true on https:// and http://localhost
+  }
+
+  if (!isSecureContextOk()) {
+    dom.gateNote.textContent =
+      'This page is not on HTTPS or localhost — browsers block camera and precise location outside a secure context.';
+    diag.error('Not a secure context — camera/geolocation will be unavailable.');
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    dom.gateNote.textContent = 'This browser does not support camera access (getUserMedia).';
+    dom.startBtn.disabled = true;
+    diag.error('navigator.mediaDevices.getUserMedia is unavailable.');
+  }
+
+  dom.startBtn.addEventListener('click', async () => {
+    dom.startBtn.disabled = true;
+    dom.startBtn.textContent = 'REQUESTING ACCESS…';
+    diag.log('User tapped "ENABLE & START".');
+    try {
+      const result = await camera.startCamera(camera.facingMode);
+      geo.start();
+      dom.permissionGate.remove();
+      if (result && result.needsResumeGesture) {
+        showResumeGate();
+      }
+    } catch (err) {
+      dom.startBtn.disabled = false;
+      dom.startBtn.textContent = 'ENABLE & START';
+      dom.gateNote.textContent = err.message || camera.describeError(err);
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // BUG FIX #4 resume gate: shown only if video.play() lost user
+  // activation after the getUserMedia prompt. Tapping this button
+  // supplies a fresh, guaranteed-current gesture to retry play().
+  // ---------------------------------------------------------------
+  function showResumeGate() {
+    dom.resumeGate.hidden = false;
+    diag.warn('Showing resume-gate: video.play() needs a fresh user gesture.');
+  }
+
+  dom.resumeGateBtn.addEventListener('click', async () => {
+    dom.resumeGateBtn.disabled = true;
+    const ok = await camera.resumePlaybackFromGesture();
+    if (ok) {
+      dom.resumeGate.hidden = true;
+    } else {
+      showToast('Could not start the video preview. Try reloading the page.', 'error');
+    }
+    dom.resumeGateBtn.disabled = false;
+  });
+
+  // ---------------------------------------------------------------
+  // Camera controls
+  // ---------------------------------------------------------------
+  dom.switchBtn.addEventListener('click', async () => {
+    dom.switchBtn.disabled = true;
+    try {
+      const result = await camera.switchCamera();
+      if (result && result.needsResumeGesture) showResumeGate();
+    } catch (err) {
+      showToast(err.message || camera.describeError(err), 'error');
+    } finally {
+      dom.switchBtn.disabled = false;
+    }
+  });
+
+  dom.torchToggle.addEventListener('change', async () => {
+    const ok = await camera.setTorch(dom.torchToggle.checked);
+    if (!ok) {
+      dom.torchToggle.checked = false;
+      showToast('Torch could not be toggled on this device.', 'error');
+    }
+  });
+
+  dom.shutterBtn.addEventListener('click', () => {
+    if (!camera.mediaStream) return;
+    capture.capturePhoto();
+    dom.shutterBtn.style.transform = 'scale(0.85)';
+    setTimeout(() => { dom.shutterBtn.style.transform = ''; }, 120);
+  });
+
+  dom.recordBtn.addEventListener('click', () => recorder.toggleRecording());
+
+  // ---------------------------------------------------------------
+  // Map / copy-coordinates
+  // ---------------------------------------------------------------
+  dom.mapBtn.addEventListener('click', () => {
+    const pos = geo.lastPosition;
+    if (!pos) { showToast('No location fix yet.', 'error'); return; }
+    const { latitude, longitude } = pos.coords;
+    window.open(`https://www.google.com/maps?q=${latitude},${longitude}`, '_blank', 'noopener');
+  });
+
+  dom.dataStrip.addEventListener('click', async () => {
+    const pos = geo.lastPosition;
+    if (!pos) { showToast('No location fix yet.', 'error'); return; }
+    const { latitude, longitude } = pos.coords;
+    const text = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Coordinates copied: ' + text, 'success');
+    } catch (err) {
+      showToast('Could not copy — clipboard access blocked.', 'error');
+      diag.warn('Clipboard write failed: ' + diag.describeErr(err));
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // Cleanup
+  // ---------------------------------------------------------------
+  window.addEventListener('beforeunload', () => {
+    geo.stop();
+    camera.stopAll();
+    gallery.revokeAll();
+  });
+
+  diag.log('GEOLENS boot sequence complete — waiting for user to tap ENABLE & START.');
+
+
+})();
+
+</script>
+</body>
+</html>
